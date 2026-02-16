@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "icoe"
+name = "sim-icoe"
 version = "0.1.0"
 description = "Iterative Causal Optimization Engine - A robust feature selection engine compatibile with Scikit-Learn."
 readme = "README.md"

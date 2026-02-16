@@ -13,7 +13,7 @@ ICOE is a robust feature selection and model optimization engine designed for hi
 ## Installation
 
 ```bash
-pip install icoe
+pip install sim-icoe
 ```
 
 ## Quick Start
