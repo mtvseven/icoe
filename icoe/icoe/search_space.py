@@ -57,6 +57,9 @@ class SearchSpace:
         for k, v in source.items():
             if hasattr(v, 'rvs'):
                 params[k] = v.rvs(random_state=self.random_state)
+            elif isinstance(v, list):
+                # Sample from list (Categorical or discrete grid)
+                params[k] = list(v)[self.random_state.randint(len(v))]
             else:
                 params[k] = v # Fixed value
         return params
