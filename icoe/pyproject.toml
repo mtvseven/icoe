@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "icoe"
+version = "0.1.0"
+description = "Iterative Causal Optimization Engine - A robust feature selection engine compatibile with Scikit-Learn."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+  {name = "ICOE Team"}
+]
+dependencies = [
+    "numpy>=1.20",
+    "pandas>=1.3",
+    "scikit-learn>=1.0",
+    "lightgbm>=3.0",
+    "joblib>=1.0",
+    "matplotlib>=3.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "flake8",
+    "black"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["icoe*"]
