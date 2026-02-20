@@ -1,7 +1,7 @@
 from sklearn.base import BaseEstimator, RegressorMixin, ClassifierMixin, check_is_fitted
 from sklearn.utils.validation import check_X_y, check_array, check_random_state
 from sklearn.utils.class_weight import compute_sample_weight
-from sklearn.metrics import mean_squared_error, roc_auc_score, accuracy_score
+from sklearn.metrics import mean_squared_error, roc_auc_score, accuracy_score, f1_score
 from joblib import Parallel, delayed
 import numpy as np
 import lightgbm as lgb
@@ -28,6 +28,11 @@ def _score_predictions(metric: str, y_true: np.ndarray, y_pred: np.ndarray, obje
              y_pred_cls = (y_pred > 0.5).astype(int)
              return accuracy_score(y_true, y_pred_cls)
         return accuracy_score(y_true, y_pred > 0.5)
+    elif metric == 'f1':
+        if objective == 'binary':
+             y_pred_cls = (y_pred > 0.5).astype(int)
+             return f1_score(y_true, y_pred_cls)
+        return f1_score(y_true, y_pred > 0.5)
     # Default fallback
     try:
         if objective in ['regression', 'regression_l1', 'huber']:
@@ -46,7 +51,9 @@ def _execute_trial(
     splitting_config: Dict[str, Any],
     objective_params: Dict[str, Any],
     metric: str,
-    class_weight_type: Optional[str]
+    class_weight_type: Optional[str],
+    early_stopping: bool = True,
+    early_stopping_rounds: int = 10
 ) -> Dict[str, Any]:
     """
     Module-level function to execute a single trial.
@@ -200,12 +207,16 @@ def _execute_trial(
     run_params['verbosity'] = -1
     run_params['n_jobs'] = 1 
     
+    callbacks = []
+    if early_stopping:
+        callbacks.append(lgb.early_stopping(stopping_rounds=early_stopping_rounds, verbose=False))
+    
     bst = lgb.train(
         run_params,
         lgb_train,
         num_boost_round=1000,
         valid_sets=[lgb_val],
-        callbacks=[lgb.early_stopping(stopping_rounds=10, verbose=False)]
+        callbacks=callbacks
     )
     
     # Manual Scoring
@@ -241,6 +252,8 @@ class _BaseICOE(BaseEstimator):
                  splitting_strategy='random',
                  search_space=None, 
                  embargo=0, 
+                 early_stopping=True,
+                 early_stopping_rounds=10,
                  ):
         self.objective = objective
         self.metric = metric
@@ -256,6 +269,8 @@ class _BaseICOE(BaseEstimator):
         self.splitting_strategy = splitting_strategy
         self.search_space = search_space
         self.embargo = embargo
+        self.early_stopping = early_stopping
+        self.early_stopping_rounds = early_stopping_rounds
 
     def _get_objective_params(self) -> Dict[str, Any]:
         """Subclasses must return specific LGBM objective params."""
@@ -408,7 +423,9 @@ class _BaseICOE(BaseEstimator):
                     splitting_config=splitting_config,
                     objective_params=obj_params,
                     metric=self.metric,
-                    class_weight_type=getattr(self, 'class_weight', None)
+                    class_weight_type=getattr(self, 'class_weight', None),
+                    early_stopping=self.early_stopping,
+                    early_stopping_rounds=self.early_stopping_rounds
                 ) for _ in range(n_trials_phase)
             )
             
@@ -454,19 +471,20 @@ class _BaseICOE(BaseEstimator):
                 print(f"[ICOE] Phase {phase+1} Best Score: {best_phase_score:.4f} (Global Best: {self.best_global_score_:.4f})")
 
             # SAFETY STOP
-            stop_condition = False
-            if self.direction == 'minimize':
-                if best_phase_score > self.best_global_score_ + self.early_stopping_tolerance:
-                    # Allow slight degradation? Default tol=0.0 means STRICT.
-                    stop_condition = True
-            else:
-                 if best_phase_score < self.best_global_score_ - self.early_stopping_tolerance:
-                    stop_condition = True
-                    
-            if stop_condition:
-                if self.verbose >= 1:
-                    print(f"[ICOE] Early Stopping: Performance degraded. Stopping.")
-                break
+            if self.early_stopping:
+                stop_condition = False
+                if self.direction == 'minimize':
+                    if best_phase_score > self.best_global_score_ + self.early_stopping_tolerance:
+                        # Allow slight degradation? Default tol=0.0 means STRICT.
+                        stop_condition = True
+                else:
+                     if best_phase_score < self.best_global_score_ - self.early_stopping_tolerance:
+                        stop_condition = True
+                        
+                if stop_condition:
+                    if self.verbose >= 1:
+                        print(f"[ICOE] Early Stopping: Performance degraded. Stopping.")
+                    break
 
             # 3.3 Causal Pruning & Adaptive Tuning (Mid-Phase)
             if phase < self.n_phases - 1:
@@ -536,7 +554,7 @@ class ICOEClassifier(_BaseICOE, ClassifierMixin):
     Iterative Causal Optimization Engine (Classifier).
     """
     def __init__(self, objective='binary', metric='auc', class_weight='balanced', **kwargs):
-        if metric in ['auc']:
+        if metric in ['auc', 'accuracy', 'f1']:
             kwargs.setdefault('direction', 'maximize')
         else:
             kwargs.setdefault('direction', 'minimize')
@@ -545,7 +563,11 @@ class ICOEClassifier(_BaseICOE, ClassifierMixin):
         super().__init__(objective=objective, metric=metric, **kwargs)
 
     def _get_objective_params(self):
-        return {'objective': self.objective, 'metric': self.metric}
+        # LightGBM doesn't support 'f1' natively. Use 'auc' for internal monitoring to effectively early stop.
+        lgbm_metric = self.metric
+        if self.metric == 'f1':
+            lgbm_metric = 'auc'
+        return {'objective': self.objective, 'metric': lgbm_metric}
 
     def predict_proba(self, X):
         conf = self.predict(X)
@@ -561,4 +583,6 @@ class ICOEClassifier(_BaseICOE, ClassifierMixin):
          if self.metric == 'auc':
              # Use raw probabilities for AUC
              return roc_auc_score(y, super().predict(X))
+         elif self.metric == 'f1':
+             return f1_score(y, self.predict(X))
          return accuracy_score(y, self.predict(X))
